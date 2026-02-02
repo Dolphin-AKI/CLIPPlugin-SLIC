@@ -28,7 +28,7 @@ static void Log(const std::string& msg) {
 /* ---------------------------------------------------------------------------
 MIT License
 
-Copyright (c) 2026/2/14  Akihiro.Watanabe, (Mitobe Hikane)
+Copyright (c) 2026/2/2  Akihiro.Watanabe, (Mitobe Hikane)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -419,7 +419,7 @@ void TRIGLAV_PLUGIN_API TriglavPluginCall(TriglavPlugInInt* result, TriglavPlugI
 				if (hostVersion >= kTriglavPlugInNeedHostVersion)
 				{
 					TriglavPlugInStringObject	moduleID = NULL;
-					const char* moduleIDString = "B4D8E92C-SLIC-4388-8927-0B6BDAFAA4DA"; // Use Unique ID
+					const char* moduleIDString = "B4D8E92C-ADEC-4388-8927-0B6BDAFAA4DA"; // Use Unique ID
 					(*pStringService).createWithAsciiStringProc(&moduleID, moduleIDString, static_cast<TriglavPlugInInt>(::strlen(moduleIDString)));
 					(*pModuleInitializeRecord).setModuleIDProc((*pluginServer).hostObject, moduleID);
 					(*pModuleInitializeRecord).setModuleKindProc((*pluginServer).hostObject, kTriglavPlugInModuleSwitchKindFilter);
@@ -454,7 +454,7 @@ void TRIGLAV_PLUGIN_API TriglavPluginCall(TriglavPlugInInt* result, TriglavPlugI
 				(*pStringService).createWithStringIDProc(&filterCategoryName, kStringIDFilterCategoryName, hostObject);
 				(*pStringService).createWithStringIDProc(&filterName, kStringIDFilterName, hostObject);
 
-				TriglavPlugInFilterInitializeSetFilterCategoryName(pRecordSuite, hostObject, filterCategoryName, 'c');
+				TriglavPlugInFilterInitializeSetFilterCategoryName(pRecordSuite, hostObject, filterCategoryName, 'e');
 				TriglavPlugInFilterInitializeSetFilterName(pRecordSuite, hostObject, filterName, 's');
 				(*pStringService).releaseProc(filterCategoryName);
 				(*pStringService).releaseProc(filterName);
