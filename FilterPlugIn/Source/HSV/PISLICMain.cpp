@@ -223,19 +223,19 @@ public:
 				size_t idx = (size_t)y * w + x;
 				const BYTE* px = srcRow + (x * pixelBytes);
 				
-				// Assumes pixelBytes >= 4 for RGBA, or at least 3 for RGB
-				BYTE r = px[0];
+				// Fix: Bitmap is likely BGRA on Windows. Swap R and B logic.
+				BYTE b = px[0];
 				BYTE g = px[1];
-				BYTE b = px[2];
+				BYTE r = px[2];
 				BYTE alpha = (pixelBytes >= 4) ? px[3] : 255;
 
-				double l, a, b_val; // b_val to avoid conflict with 'b'
-				RGB2LAB(r, g, b, l, a, b_val);
+				double l, a, b_val; 
+				RGB2LAB(r, g, b, l, a, b_val); // correctly pass R, G, B
 				labData[idx] = { l, a, b_val };
 
 				validPixels[idx] = (alpha != 0);
 
-				// Initialize result with original
+				// Initialize result with original components in proper R,G,B order
 				resultRGB[idx*4+0] = r;
 				resultRGB[idx*4+1] = g;
 				resultRGB[idx*4+2] = b;
@@ -626,7 +626,7 @@ void TRIGLAV_PLUGIN_API TriglavPluginCall(TriglavPlugInInt* result, TriglavPlugI
 							}
 							Log("Processor Done.");
 							
-							// 4. Create Result Bitmap
+							// 4. Create Result Bitmap & Handle Selection Blending
 							if((*pBitmapService).createProc(&dstBitmap, width, height, 4, kTriglavPlugInBitmapScanlineHorizontalLeftTop) != kTriglavPlugInAPIResultSuccess) {
 								Log("Failed to create dst bitmap");
 								break;
@@ -636,20 +636,94 @@ void TRIGLAV_PLUGIN_API TriglavPluginCall(TriglavPlugInInt* result, TriglavPlugI
 							(*pBitmapService).getAddressProc(&dstRaw, dstBitmap, &zeroPos);
 							TriglavPlugInInt dstRowBytes = 0;
 							(*pBitmapService).getRowBytesProc(&dstRowBytes, dstBitmap);
+							TriglavPlugInInt dstPixelBytes = 0;
+							(*pBitmapService).getPixelBytesProc(&dstPixelBytes, dstBitmap);
+
+							// Check for selection
+							TriglavPlugInOffscreenObject selectAreaOffscreenObject = NULL;
+							TriglavPlugInFilterRunGetSelectAreaOffscreen(pRecordSuite, &selectAreaOffscreenObject, (*pluginServer).hostObject);
 							
-							// Copy result to bitmap buffer (assuming RGBA structure match)
+							ScopeBitmap selectBitmap(pBitmapService);
+							bool hasSelection = (selectAreaOffscreenObject != NULL);
+							TriglavPlugInPtr selectRaw = NULL;
+							TriglavPlugInInt selectRowBytes = 0;
+							TriglavPlugInInt selectPixelBytes = 0;
+							
+							if (hasSelection) {
+								// Copy selection to bitmap for safe access
+								if ((*pBitmapService).createProc(&selectBitmap, width, height, 4, kTriglavPlugInBitmapScanlineHorizontalLeftTop) == kTriglavPlugInAPIResultSuccess) {
+									// Using copy mode normal (or whatever is appropriate for mask)
+									if ((*pOffscreenService).getBitmapProc(selectBitmap, &zeroPos, selectAreaOffscreenObject, &srcPos, width, height, kTriglavPlugInOffscreenCopyModeNormal) == kTriglavPlugInAPIResultSuccess) {
+										(*pBitmapService).getAddressProc(&selectRaw, selectBitmap, &zeroPos);
+										(*pBitmapService).getRowBytesProc(&selectRowBytes, selectBitmap);
+										(*pBitmapService).getPixelBytesProc(&selectPixelBytes, selectBitmap);
+									} else {
+										hasSelection = false; // Fallback?
+									}
+								} else {
+									hasSelection = false;
+								}
+							}
+
+							// Blend and Write Loop
 							for (TriglavPlugInInt y = 0; y < height; y++) {
 								BYTE* dstRow = (BYTE*)dstRaw + (y * dstRowBytes);
+								const BYTE* srcRowPtr = (const BYTE*)srcRaw + (y * srcRowBytes);
+								const BYTE* selectRowPtr = hasSelection ? (const BYTE*)selectRaw + (y * selectRowBytes) : NULL;
+
 								for (TriglavPlugInInt x = 0; x < width; x++) {
 									size_t idx = (size_t)y * width + x;
-									dstRow[x*4 + 0] = processor.resultRGB[idx*4 + 0];
-									dstRow[x*4 + 1] = processor.resultRGB[idx*4 + 1];
-									dstRow[x*4 + 2] = processor.resultRGB[idx*4 + 2];
-									dstRow[x*4 + 3] = processor.resultRGB[idx*4 + 3];
+									
+									// SLIC Result (stored as R, G, B, A in processor.resultRGB)
+									BYTE fR = processor.resultRGB[idx*4 + 0];
+									BYTE fG = processor.resultRGB[idx*4 + 1];
+									BYTE fB = processor.resultRGB[idx*4 + 2];
+									
+									// Get source alpha to preserve transparency
+									BYTE srcA = srcRowPtr[x * srcPixelBytes + 3];
+
+									BYTE alpha = 255; // Default full application (Selection Mask Alpha)
+									if (hasSelection && selectRowPtr) {
+										// Assuming selection bitmap is grayscale or alpha only
+										// Only need one channel if it's a mask. 
+										// Triglav masks are usually 8-bit grayscale in RGB or A.
+										alpha = selectRowPtr[x * selectPixelBytes]; 
+									}
+									
+									BYTE finalB, finalG, finalR;
+
+									if (alpha == 255) {
+										finalR = fR;
+										finalG = fG;
+										finalB = fB;
+									} else if (alpha == 0) {
+										// Pure original
+										// srcRowPtr is in BGRA (from Bitmap) as established in Initialize
+										finalB = srcRowPtr[x * srcPixelBytes + 0];
+										finalG = srcRowPtr[x * srcPixelBytes + 1];
+										finalR = srcRowPtr[x * srcPixelBytes + 2];
+									} else {
+										// Blend
+										BYTE oB = srcRowPtr[x * srcPixelBytes + 0];
+										BYTE oG = srcRowPtr[x * srcPixelBytes + 1];
+										BYTE oR = srcRowPtr[x * srcPixelBytes + 2];
+										
+										finalR = (BYTE)((fR * alpha + oR * (255 - alpha)) / 255);
+										finalG = (BYTE)((fG * alpha + oG * (255 - alpha)) / 255);
+										finalB = (BYTE)((fB * alpha + oB * (255 - alpha)) / 255);
+									}
+
+									// Write to Dst Bitmap (BGRA order)
+									dstRow[x * dstPixelBytes + 0] = finalB;
+									dstRow[x * dstPixelBytes + 1] = finalG;
+									dstRow[x * dstPixelBytes + 2] = finalR;
+									dstRow[x * dstPixelBytes + 3] = srcA; // Use source alpha instead of fixed 255
 								}
 							}
 							
-							// 5. Write back to Dest Offscreen
+							// 5. Write back to Dest Offscreen (Full Copy)
+							// Now we copy the entire blended bitmap to the offscreen
+							// effectively applying the filter only where mask allowed, and preserving original elsewhere.
 							if((*pOffscreenService).setBitmapProc(destinationOffscreenObject, &srcPos, dstBitmap, &zeroPos, width, height, kTriglavPlugInOffscreenCopyModeNormal) != kTriglavPlugInAPIResultSuccess) {
 								Log("Failed to write to dest offscreen");
 							}
@@ -659,6 +733,7 @@ void TRIGLAV_PLUGIN_API TriglavPluginCall(TriglavPlugInInt* result, TriglavPlugI
 							// Cleanup
 							srcBitmap.Release();
 							dstBitmap.Release();
+							selectBitmap.Release();
 							
 							Log("Loop Finished (one pass)");
 							
